@@ -4,219 +4,435 @@ import sympy as sp
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-from sympy.parsing.sympy_parser import (parse_expr,
-                                        standard_transformations,
-                                        implicit_multiplication_application,
-                                        convert_xor)
+from sympy.parsing.sympy_parser import (
+    parse_expr, standard_transformations,
+    implicit_multiplication_application, convert_xor
+)
+from datetime import datetime
 transformations = (standard_transformations + (implicit_multiplication_application, convert_xor))
 
-st.set_page_config(page_title="Math Master — Algebra, Calculus, Trig, Sets & Graphs", layout="wide")
+st.set_page_config(page_title="Math Master+ — Steps, Functions & Graphs", layout="wide")
 
-st.title("🔢 Math Master — Algebra, Calculus, Trig, Sets & Graphs")
-
-st.markdown("""
-This app solves arithmetic, algebra, trigonometry, calculus (derivative/integral), set operations,
-profit & loss problems, and plots equations. Enter expressions in usual math form, e.g. `2*x+3`, `sin(x)`, `x**2 - 4 = 0`.
-""")
-
-# -----------------------
-# Helper functions
-# -----------------------
+# ---------- Helpers ----------
 def safe_parse(s):
-    """Parse a user expression into sympy expression safely with some transformations."""
+    if s is None:
+        raise ValueError("Empty input")
     try:
         return parse_expr(s, transformations=transformations)
     except Exception as e:
-        raise ValueError(f"Could not parse expression: {e}")
+        raise ValueError(f"Cannot parse expression: {e}")
 
-def solve_equation(equation_str, symbol_list=None):
-    """Solve equation_str (like 'x^2-1=0' or 'sin(x)-0.5=0')"""
+def latex(expr):
+    try:
+        return sp.latex(sp.simplify(expr))
+    except:
+        return str(expr)
+
+# ---------- Step-by-step solver for single equation ----------
+def explain_solve_equation(equation_str, var_name='x'):
+    steps = []
+    x = sp.Symbol(var_name)
+    # Parse equation
     if "=" in equation_str:
-        left, right = equation_str.split("=" ,1)
-        left_e = safe_parse(left)
-        right_e = safe_parse(right)
-        eq = sp.Eq(left_e, right_e)
+        left_str, right_str = equation_str.split("=", 1)
+        left = safe_parse(left_str)
+        right = safe_parse(right_str)
     else:
-        eq = sp.Eq(safe_parse(equation_str), 0)
-    # determine symbols
-    syms = symbol_list or list(eq.free_symbols)
-    if len(syms) == 0:
-        solutions = sp.solve(eq, dict=True)
-    elif len(syms) == 1:
-        solutions = sp.solve(eq, syms[0], dict=True)
-    else:
-        # system? if multiple eqns (comma separated?) user should use system solver
-        solutions = sp.solve(eq, syms)
-    return solutions
+        left = safe_parse(equation_str)
+        right = sp.Integer(0)
+    steps.append({"text": "Original equation", "expr": sp.Eq(left, right)})
 
-def solve_system(eqs_text):
-    """Solve system: input lines of equations separated by newline or ';'"""
-    parts = [p.strip() for p in eqs_text.replace(";", "\n").splitlines() if p.strip()]
-    eqs = []
-    syms = set()
-    for p in parts:
-        if "=" in p:
-            l, r = p.split("=",1)
-            le = safe_parse(l); re = safe_parse(r)
-            eqs.append(sp.Eq(le, re))
-            syms |= set(le.free_symbols) | set(re.free_symbols)
+    # Move all to left -> simplify
+    expr = sp.simplify(left - right)
+    steps.append({"text": "Bring all terms to one side (standard form)", "expr": sp.Eq(expr, 0)})
+
+    # If polynomial in var
+    try:
+        poly = sp.Poly(sp.expand(expr), x)
+        if poly.is_polynomial(x):
+            deg = poly.degree()
         else:
-            ex = safe_parse(p)
-            eqs.append(sp.Eq(ex, 0))
-            syms |= set(ex.free_symbols)
-    syms = sorted(list(syms), key=lambda s: s.name)
-    if len(eqs) == 0:
-        return "No equations found"
-    sol = sp.solve(eqs, syms, dict=True)
-    return sol
+            poly = None
+            deg = None
+    except Exception:
+        poly = None
+        deg = None
 
-def differentiate(expr_str, var_str="x", order=1):
-    var = sp.Symbol(var_str)
-    expr = safe_parse(expr_str)
-    return sp.diff(expr, var, order)
+    # Linear case
+    if deg == 1:
+        a = poly.coeffs()[0] if len(poly.coeffs()) >= 1 else 0
+        # better get coefficients by degree
+        a = poly.coeff_monomial(x)
+        b = sp.expand(poly.as_expr() - a*x)
+        # solve ax + b = 0 => x = -b/a
+        steps.append({"text": "Linear equation detected. Isolate x.", "expr": None})
+        solution = sp.solve(sp.Eq(expr, 0), x)
+        steps.append({"text": "Solution", "expr": solution})
+        return steps
 
-def integrate(expr_str, var_str="x", lower=None, upper=None):
-    var = sp.Symbol(var_str)
+    # Quadratic case
+    if deg == 2:
+        coeffs = poly.all_coeffs()  # [a, b, c]
+        a, b, c = coeffs
+        steps.append({"text": f"Quadratic detected with coefficients a={a}, b={b}, c={c}", "expr": None})
+        disc = sp.simplify(b**2 - 4*a*c)
+        steps.append({"text": "Compute discriminant Δ = b² - 4ac", "expr": disc})
+        sqrt_disc = sp.sqrt(disc) if disc != 0 else sp.Integer(0)
+        steps.append({"text": "Square root of discriminant", "expr": sqrt_disc})
+        sol1 = sp.simplify((-b + sqrt_disc) / (2*a))
+        sol2 = sp.simplify((-b - sqrt_disc) / (2*a))
+        steps.append({"text": "Quadratic formula solutions (x = (-b ± √Δ) / (2a))", "expr": [sol1, sol2]})
+        return steps
+
+    # Try factoring
+    fact = sp.factor(expr)
+    if fact != expr:
+        steps.append({"text": "Factorized expression", "expr": sp.Eq(fact, 0)})
+        # If factorization yields product, set each factor zero
+        if isinstance(fact, sp.Mul):
+            factors = fact.as_ordered_factors()
+            sol = []
+            for f in factors:
+                try:
+                    sols_f = sp.solve(sp.Eq(f, 0), x)
+                    sol.extend(sols_f if isinstance(sols_f, list) else [sols_f])
+                except Exception:
+                    pass
+            steps.append({"text": "Solve each factor = 0", "expr": sol})
+            return steps
+
+    # Fallback: numeric/symbolic solve
+    try:
+        sols = sp.solve(sp.Eq(expr, 0), x)
+        steps.append({"text": "General solution (via sympy.solve)", "expr": sols})
+    except Exception as e:
+        steps.append({"text": "Could not solve symbolically: " + str(e), "expr": None})
+    return steps
+
+# ---------- Explain derivative ----------
+def explain_derivative(expr_str, var_name='x', order=1):
+    x = sp.Symbol(var_name)
     expr = safe_parse(expr_str)
+    steps = []
+    steps.append({"text":"Original function f(x)", "expr": expr})
+    # derivative
+    d = sp.diff(expr, x, order)
+    steps.append({"text": f"{order} order derivative", "expr": d})
+    # simplify
+    ds = sp.simplify(d)
+    steps.append({"text":"Simplified derivative", "expr": ds})
+    # second derivative for critical analysis if order==1
+    if order == 1:
+        dd = sp.diff(ds, x)
+        steps.append({"text":"Second derivative (for concavity / extremum test)", "expr": sp.simplify(dd)})
+    return steps
+
+# ---------- Explain integral ----------
+def explain_integral(expr_str, var_name='x', lower=None, upper=None):
+    x = sp.Symbol(var_name)
+    expr = safe_parse(expr_str)
+    steps = []
+    steps.append({"text":"Integrand", "expr": expr})
     if lower is None and upper is None:
-        return sp.integrate(expr, var)
+        F = sp.integrate(expr, x)
+        steps.append({"text":"Indefinite integral (antiderivative)", "expr": F})
     else:
-        low = safe_parse(str(lower))
-        up = safe_parse(str(upper))
-        return sp.integrate(expr, (var, low, up))
+        l = safe_parse(str(lower))
+        u = safe_parse(str(upper))
+        F = sp.integrate(expr, x)
+        steps.append({"text":"Antiderivative F(x)", "expr": F})
+        val = sp.simplify(F.subs(x, u) - F.subs(x, l))
+        steps.append({"text": f"Definite integral from {l} to {u}", "expr": val})
+    return steps
 
-def numeric_eval(expr_str, subs=None):
+# ---------- Function analysis ----------
+from sympy.calculus.util import continuous_domain, function_range
+def analyze_function(expr_str, var_name='x', domain_hint=None, numeric_test_range=(-10,10)):
+    x = sp.Symbol(var_name)
     expr = safe_parse(expr_str)
-    if subs:
-        return float(expr.evalf(subs=subs))
-    return float(expr.evalf())
+    res = {}
+    # domain
+    try:
+        dom = continuous_domain(expr, x, sp.S.Reals)
+        res['domain'] = dom
+    except Exception:
+        res['domain'] = "Could not determine domain symbolically"
+    # range (attempt)
+    try:
+        rng = function_range(expr, sp.S.Reals, x)
+        res['range'] = rng
+    except Exception:
+        res['range'] = "Range detection failed or too complex"
+    # derivative
+    try:
+        deriv = sp.simplify(sp.diff(expr, x))
+        res['derivative'] = deriv
+    except Exception:
+        res['derivative'] = "Could not differentiate"
+    # critical points solve derivative == 0
+    crits = []
+    try:
+        sols = sp.solve(sp.Eq(sp.simplify(sp.diff(expr, x)), 0), x)
+        # keep numeric-real ones
+        real_crits = []
+        for s in sols:
+            try:
+                s_eval = complex(sp.N(s))
+                if abs(s_eval.imag) < 1e-8:
+                    real_crits.append(sp.N(s_eval.real))
+            except Exception:
+                pass
+        crits = sorted(list(set(real_crits)))
+        res['critical_points'] = crits
+    except Exception:
+        res['critical_points'] = "Could not find critical points symbolically"
+    # monotonicity: test derivative sign on intervals between critical points
+    try:
+        pts = [-1e6] + [float(c) for c in crits] + [1e6]
+        intervals = []
+        deriv_f = sp.lambdify(x, deriv, modules=["numpy", "math"])
+        for i in range(len(pts)-1):
+            a = pts[i]; b = pts[i+1]
+            test = (a + b) / 2.0
+            try:
+                val = deriv_f(test)
+                sign = "increasing" if val > 0 else ("decreasing" if val < 0 else "stationary")
+            except Exception:
+                sign = "unknown"
+            intervals.append(((a,b), sign))
+        res['monotonicity'] = intervals
+    except Exception:
+        res['monotonicity'] = "Could not determine monotonicity"
+    # extrema via second derivative test where possible
+    try:
+        second = sp.simplify(sp.diff(expr, x, 2))
+        extrema = []
+        for c in crits:
+            try:
+                sec_val = float(second.subs(x, c))
+                if sec_val > 0:
+                    extrema.append((float(c), "local minima"))
+                elif sec_val < 0:
+                    extrema.append((float(c), "local maxima"))
+                else:
+                    extrema.append((float(c), "inconclusive"))
+            except Exception:
+                extrema.append((float(c), "inconclusive"))
+        res['second_derivative'] = second
+        res['extrema'] = extrema
+    except Exception:
+        res['second_derivative'] = "N/A"
+        res['extrema'] = "N/A"
+    # asymptotes: vertical from denom zeros, horizontal from limits
+    try:
+        texpr = sp.together(expr)
+        denom = sp.denom(texpr)
+        verts = []
+        if denom != 1:
+            roots = sp.solve(sp.Eq(denom, 0), x)
+            for r in roots:
+                try:
+                    rv = complex(sp.N(r))
+                    if abs(rv.imag) < 1e-8:
+                        verts.append(sp.N(rv.real))
+                except Exception:
+                    pass
+        res['vertical_asymptotes'] = verts
+    except Exception:
+        res['vertical_asymptotes'] = []
+    # horizontal/oblique limits
+    try:
+        lim_pos = sp.limit(expr, x, sp.oo)
+        lim_neg = sp.limit(expr, x, -sp.oo)
+        res['limit_pos_inf'] = lim_pos
+        res['limit_neg_inf'] = lim_neg
+    except Exception:
+        res['limit_pos_inf'] = "N/A"
+        res['limit_neg_inf'] = "N/A"
+    return res
 
-def plot_functions(exprs, var='x', x_min=-10, x_max=10, points=500):
-    x = sp.Symbol(var)
+# ---------- Plotting with critical points ----------
+def plot_with_critical(expr_str, var_name='x', x_min=-10, x_max=10, points=1000):
+    x = sp.Symbol(var_name)
+    expr = safe_parse(expr_str)
+    f = sp.lambdify(x, expr, modules=["numpy", "math"])
     xs = np.linspace(x_min, x_max, points)
-    plt.figure(figsize=(8,4))
-    for expr_text in exprs:
-        try:
-            expr = safe_parse(expr_text)
-            f = sp.lambdify(x, expr, modules=["numpy", "math"])
-            ys = f(xs)
-            plt.plot(xs, ys, label=expr_text)
-        except Exception as e:
-            st.warning(f"Could not plot {expr_text}: {e}")
-    plt.axhline(0, color='black', linewidth=0.5)
-    plt.axvline(0, color='black', linewidth=0.5)
-    plt.legend()
-    plt.grid(alpha=0.3)
-    st.pyplot(plt.gcf())
+    try:
+        ys = f(xs)
+    except Exception as e:
+        # maybe domain issues: mask where invalid
+        ys = np.full_like(xs, np.nan, dtype=float)
+        for i, xv in enumerate(xs):
+            try:
+                ys[i] = float(f(xv))
+            except Exception:
+                ys[i] = np.nan
+    fig, ax = plt.subplots(figsize=(8,4))
+    ax.plot(xs, ys, label=str(expr))
+    # critical points
+    try:
+        deriv = sp.simplify(sp.diff(expr, x))
+        crits = sp.solve(sp.Eq(deriv, 0), x)
+        real_crits = []
+        for c in crits:
+            try:
+                c_eval = float(sp.N(c))
+                if x_min <= c_eval <= x_max:
+                    real_crits.append(c_eval)
+            except Exception:
+                pass
+        for c in real_crits:
+            try:
+                y = float(sp.N(sp.N(expr.subs(x, c))))
+                ax.scatter([c], [y], color='red', zorder=5)
+                ax.annotate(f"c={round(c,4)}", xy=(c,y), xytext=(5,5), textcoords='offset points')
+            except Exception:
+                pass
+    except Exception:
+        pass
+    ax.axhline(0, color='black', linewidth=0.5)
+    ax.axvline(0, color='black', linewidth=0.5)
+    ax.grid(alpha=0.3)
+    ax.legend()
+    st.pyplot(fig)
     plt.clf()
 
-def parse_set(s):
-    # expect input like {1,2,3} or 1,2,3
-    s = s.strip()
-    if s.startswith("{") and s.endswith("}"):
-        s = s[1:-1]
-    if not s:
-        return set()
-    parts = [p.strip() for p in s.split(",") if p.strip()]
-    # Try to parse ints/floats, otherwise leave as string
-    parsed = set()
-    for p in parts:
-        try:
-            val = int(p)
-        except:
-            try:
-                val = float(p)
-            except:
-                val = p
-        parsed.add(val)
-    return parsed
+# ---------- UI ----------
+st.title("Math Master+ (Step-by-step & Function Analyzer)")
+st.markdown("Choose a tool from the left. This app returns symbolic answers and **step-by-step explanations** (where possible).")
 
-# -----------------------
-# UI: Left column — choose operation
-# -----------------------
-ops = [
-    "Arithmetic / Percentage / Profit-Loss",
-    "Algebra: simplify / expand / factor / substitute",
-    "Solve equation (single)",
-    "Solve system of equations",
-    "Trigonometry simplify / eval",
-    "Derivative (symbolic)",
-    "Integral (indefinite / definite)",
-    "Plot function(s) y = f(x)",
-    "Sets: union/intersection/difference/membership",
-    "Expression evaluation / numeric"
+tools = [
+    "Equation solver (detailed steps)",
+    "Function analysis (domain, range, monotonicity, extrema, asymptotes)",
+    "Derivative (steps)",
+    "Integral (steps)",
+    "Plot function(s) with critical points",
+    "Algebra quick tools (simplify/expand/factor)",
+    "Systems, sets, arithmetic (basic)"
 ]
-st.sidebar.header("Choose a tool")
-choice = st.sidebar.selectbox("Operation", ops)
+choice = st.sidebar.selectbox("Tool", tools)
 
-# -----------------------
-# Tool: Arithmetic / Percent / Profit-Loss
-# -----------------------
-if choice == ops[0]:
-    st.header("Arithmetic / Percentage / Profit & Loss")
-    st.markdown("Use this to solve simple business math: profit, loss, discount, percentage change, simple interest.")
-    col1, col2 = st.columns(2)
-    with col1:
-        a = st.number_input("Value A", value=100.0)
-        b = st.number_input("Value B", value=120.0)
-        op = st.selectbox("Operation", ["Difference (B-A)", "Percentage change (B vs A)", "Profit/Loss (given cost & sell)", "Discount", "Simple Interest"])
-    with col2:
-        if op == "Profit/Loss (given cost & sell)":
-            cost = st.number_input("Cost price", value=100.0)
-            sell = st.number_input("Selling price", value=120.0)
-            if st.button("Compute Profit/Loss"):
-                diff = sell - cost
-                pct = (diff / cost) * 100 if cost != 0 else float('inf')
-                if diff > 0:
-                    st.success(f"Profit = {diff:.2f} ({pct:.2f}%)")
-                elif diff < 0:
-                    st.error(f"Loss = {abs(diff):.2f} ({abs(pct):.2f}%)")
+# ---------- Equation solver ----------
+if choice == tools[0]:
+    st.header("Equation solver — step-by-step")
+    eq = st.text_input("Enter equation (use =), e.g. x**2 - 4 = 0", value="x**2 - 4 = 0")
+    var = st.text_input("Variable (default x)", value="x")
+    if st.button("Explain & Solve"):
+        try:
+            steps = explain_solve_equation(eq, var)
+            for i, s in enumerate(steps):
+                st.markdown(f"**Step {i+1}: {s['text']}**")
+                if s["expr"] is not None:
+                    st.latex(sp.latex(s["expr"]))
                 else:
-                    st.info("No profit, no loss")
-        elif op == "Difference (B-A)":
-            if st.button("Compute Difference"):
-                st.write(f"Difference = {b - a:.4f}")
-        elif op == "Percentage change (B vs A)":
-            if st.button("Compute % change"):
-                if a == 0:
-                    st.warning("Base A is zero — percentage change undefined")
-                else:
-                    pct = ((b - a) / a) * 100
-                    st.write(f"Percentage change = {pct:.2f}%")
-        elif op == "Discount":
-            price = st.number_input("Original price", value=100.0)
-            disc = st.number_input("Discount percent", value=10.0)
-            if st.button("Compute Discount"):
-                newp = price * (1 - disc/100)
-                st.write(f"Discounted price = {newp:.2f}")
-        elif op == "Simple Interest":
-            p = st.number_input("Principal", value=1000.0)
-            r = st.number_input("Annual rate (%)", value=5.0)
-            t = st.number_input("Time (years)", value=1.0)
-            if st.button("Compute SI"):
-                si = p * r * t / 100
-                st.write(f"Simple Interest = {si:.2f}, Amount = {p+si:.2f}")
+                    st.write(s.get("text_detail",""))
+        except Exception as e:
+            st.error(e)
 
-# -----------------------
-# Algebra: simplify/expand/factor/substitute
-# -----------------------
-elif choice == ops[1]:
-    st.header("Algebra: simplify / expand / factor / substitute")
-    expr_in = st.text_input("Enter expression (use x,y,z):", value="(x+1)**2")
-    action = st.selectbox("Action", ["Simplify", "Expand", "Factor", "Substitute (give x=2)"])
+# ---------- Function analysis ----------
+elif choice == tools[1]:
+    st.header("Function analysis")
+    expr_in = st.text_input("Enter f(x), e.g. (x**3 - 3*x + 1) / (x-1)", value="(x**3 - 3*x + 1)/(x-1)")
+    var = st.text_input("Variable (default x)", value="x")
+    x_min = st.number_input("Plot x min", value=-10.0)
+    x_max = st.number_input("Plot x max", value=10.0)
+    if st.button("Analyze function"):
+        try:
+            res = analyze_function(expr_in, var, numeric_test_range=(x_min, x_max))
+            st.subheader("Summary")
+            st.write("Expression:", expr_in)
+            st.write("Domain:", res.get('domain'))
+            st.write("Range:", res.get('range'))
+            st.write("Derivative f'(x):")
+            if 'derivative' in res:
+                st.latex(sp.latex(res['derivative']))
+            st.write("Critical points (real):", res.get('critical_points'))
+            st.write("Monotonicity (intervals):")
+            mono = res.get('monotonicity')
+            if isinstance(mono, list):
+                for iv, sign in mono:
+                    st.write(f"{iv} → {sign}")
+            else:
+                st.write(mono)
+            st.write("Extrema (second derivative test):", res.get('extrema'))
+            st.write("Vertical asymptotes:", res.get('vertical_asymptotes'))
+            st.write("Limit x→+∞:", res.get('limit_pos_inf'), " Limit x→-∞:", res.get('limit_neg_inf'))
+            st.subheader("Plot with critical points")
+            plot_with_critical(expr_in, var, float(x_min), float(x_max))
+        except Exception as e:
+            st.error("Analysis failed: " + str(e))
+
+# ---------- Derivative ----------
+elif choice == tools[2]:
+    st.header("Derivative (symbolic) with steps")
+    expr = st.text_input("Enter function f(x)", value="x**2 * sin(x)")
+    var = st.text_input("Variable (default x)", value="x")
+    order = st.number_input("Order", min_value=1, max_value=5, value=1)
+    if st.button("Differentiate"):
+        try:
+            steps = explain_derivative(expr, var, int(order))
+            for i, s in enumerate(steps):
+                st.markdown(f"**Step {i+1}: {s['text']}**")
+                if s['expr'] is not None:
+                    st.latex(sp.latex(s['expr']))
+        except Exception as e:
+            st.error(e)
+
+# ---------- Integral ----------
+elif choice == tools[3]:
+    st.header("Integral (indefinite & definite) with steps")
+    expr = st.text_input("Enter integrand f(x)", value="x**2")
+    var = st.text_input("Variable (default x)", value="x")
+    mode = st.selectbox("Mode", ["Indefinite", "Definite"])
+    if mode == "Definite":
+        a = st.text_input("Lower limit", value="0")
+        b = st.text_input("Upper limit", value="1")
+    if st.button("Integrate"):
+        try:
+            if mode == "Indefinite":
+                steps = explain_integral(expr, var, None, None)
+            else:
+                steps = explain_integral(expr, var, a, b)
+            for i, s in enumerate(steps):
+                st.markdown(f"**Step {i+1}: {s['text']}**")
+                if s['expr'] is not None:
+                    st.latex(sp.latex(s['expr']))
+        except Exception as e:
+            st.error(e)
+
+# ---------- Plot ----------
+elif choice == tools[4]:
+    st.header("Plot function(s) and mark critical points")
+    text = st.text_area("Enter functions (one per line), example: sin(x)\nx**3 - 3*x + 1", height=180)
+    xmin = st.number_input("x min", value=-10.0)
+    xmax = st.number_input("x max", value=10.0)
+    if st.button("Plot"):
+        exprs = [ln.strip() for ln in text.splitlines() if ln.strip()]
+        for ex in exprs:
+            st.subheader(f"Plot: {ex}")
+            try:
+                plot_with_critical(ex, 'x', float(xmin), float(xmax))
+            except Exception as e:
+                st.error(f"Cannot plot {ex}: {e}")
+
+# ---------- Algebra quick tools ----------
+elif choice == tools[5]:
+    st.header("Algebra quick tools")
+    expr = st.text_input("Expression", value="(x+1)**2")
+    action = st.selectbox("Action", ["Simplify", "Expand", "Factor", "Substitute"])
     if st.button("Run"):
         try:
-            e = safe_parse(expr_in)
+            e = safe_parse(expr)
             if action == "Simplify":
                 st.write(sp.simplify(e))
             elif action == "Expand":
                 st.write(sp.expand(e))
             elif action == "Factor":
                 st.write(sp.factor(e))
-            elif action.startswith("Substitute"):
-                sub_str = st.text_input("Substitute (syntax: x=2,y=3)", value="x=2")
+            elif action == "Substitute":
+                s = st.text_input("Substitute (e.g., x=2,y=3)", value="x=2")
                 subs = {}
-                for kv in sub_str.split(","):
+                for kv in s.split(","):
                     if "=" in kv:
                         k,v = kv.split("=")
                         subs[sp.Symbol(k.strip())] = safe_parse(v.strip())
@@ -224,184 +440,11 @@ elif choice == ops[1]:
         except Exception as ex:
             st.error(ex)
 
-# -----------------------
-# Solve single equation
-# -----------------------
-elif choice == ops[2]:
-    st.header("Solve an equation (single variable)")
-    eq_text = st.text_input("Equation, e.g. x**2 - 4 = 0", value="x**2 - 4 = 0")
-    var = st.text_input("Solve for (symbol) — leave blank to auto-detect", value="x")
-    if st.button("Solve"):
-        try:
-            sols = solve_equation(eq_text, [sp.Symbol(var)] if var.strip() else None)
-            st.write("Solutions:")
-            st.write(sols)
-            if hasattr(sols, '__iter__') and len(sols) > 0:
-                # show numeric approximate
-                try:
-                    approx = [sp.N(s) for s in sols]
-                    st.write("Numeric approximations:")
-                    st.write(approx)
-                except:
-                    pass
-        except Exception as ex:
-            st.error(ex)
+# ---------- Systems, sets, arithmetic ----------
+elif choice == tools[6]:
+    st.header("Systems, sets and basic arithmetic")
+    st.markdown("Use existing app earlier — this area supports systems, sets, profit/loss etc.")
+    st.info("You can use the previous Math Master code or ask me to add a dedicated UI here.")
 
-# -----------------------
-# Solve system
-# -----------------------
-elif choice == ops[3]:
-    st.header("Solve a system of equations")
-    st.markdown("Enter one equation per line. Use `=`. Example:\n```\nx + y = 5\nx - y = 1\n```")
-    sys_text = st.text_area("Equations (one per line)", height=150, value="x + y = 5\nx - y = 1")
-    if st.button("Solve system"):
-        try:
-            sol = solve_system(sys_text)
-            st.write("Solution:")
-            st.write(sol)
-        except Exception as ex:
-            st.error(ex)
-
-# -----------------------
-# Trig
-# -----------------------
-elif choice == ops[4]:
-    st.header("Trigonometry")
-    trig_expr = st.text_input("Trig expression (use sin, cos, tan, asin, acos):", value="sin(x)**2 + cos(x)**2")
-    if st.button("Simplify / Evaluate"):
-        try:
-            e = safe_parse(trig_expr)
-            st.write("Simplified:", sp.simplify(e))
-            # evaluate at numeric value if wants
-            if st.checkbox("Evaluate numerically at x=pi/4"):
-                val = float(e.subs({sp.Symbol('x'): sp.pi/4}).evalf())
-                st.write("Value at x=π/4:", val)
-        except Exception as ex:
-            st.error(ex)
-
-# -----------------------
-# Derivative
-# -----------------------
-elif choice == ops[5]:
-    st.header("Derivative (symbolic)")
-    expr = st.text_input("Enter function f(x):", value="sin(x)*x**2")
-    var = st.text_input("Variable (default x):", value="x")
-    order = st.number_input("Order of derivative", min_value=1, max_value=10, value=1, step=1)
-    if st.button("Differentiate"):
-        try:
-            res = differentiate(expr, var, int(order))
-            st.write("Result:")
-            st.write(sp.simplify(res))
-            st.write("LaTeX:")
-            st.latex(sp.latex(res))
-        except Exception as ex:
-            st.error(ex)
-
-# -----------------------
-# Integral
-# -----------------------
-elif choice == ops[6]:
-    st.header("Integral (indefinite / definite)")
-    expr = st.text_input("Function f(x) to integrate:", value="x**2")
-    var = st.text_input("Variable (default x):", value="x")
-    mode = st.selectbox("Mode", ["Indefinite", "Definite"])
-    if mode == "Definite":
-        low = st.text_input("Lower limit (e.g., 0)", value="0")
-        high = st.text_input("Upper limit (e.g., 1)", value="1")
-    if st.button("Integrate"):
-        try:
-            if mode == "Indefinite":
-                res = integrate(expr, var, None, None)
-                st.write("Indefinite integral:")
-                st.write(sp.simplify(res))
-                st.latex(sp.latex(res))
-            else:
-                res = integrate(expr, var, low, high)
-                st.write(f"Definite integral from {low} to {high}:")
-                st.write(res)
-        except Exception as ex:
-            st.error(ex)
-
-# -----------------------
-# Plot functions
-# -----------------------
-elif choice == ops[7]:
-    st.header("Plot functions y = f(x)")
-    text = st.text_area("Enter one or more functions (one per line), use 'x' as variable. E.g.:\n x**2\n sin(x)\n x**3 - 4*x + 1", height=160)
-    x_min = st.number_input("x min", value=-10.0)
-    x_max = st.number_input("x max", value=10.0)
-    if st.button("Plot"):
-        exprs = [ln.strip() for ln in text.splitlines() if ln.strip()]
-        if not exprs:
-            st.warning("Enter at least one function")
-        else:
-            try:
-                plot_functions(exprs, 'x', float(x_min), float(x_max))
-            except Exception as ex:
-                st.error(ex)
-
-# -----------------------
-# Sets
-# -----------------------
-elif choice == ops[8]:
-    st.header("Set operations")
-    a = st.text_input("Set A (comma separated or {1,2,3}):", value="1,2,3,4")
-    b = st.text_input("Set B (comma separated):", value="3,4,5")
-    op_set = st.selectbox("Operation", ["Union", "Intersection", "Difference A-B", "Difference B-A", "Membership A? x"])
-    if st.button("Compute"):
-        try:
-            A = parse_set(a)
-            B = parse_set(b)
-            if op_set == "Union":
-                st.write("Union:", A | B)
-            elif op_set == "Intersection":
-                st.write("Intersection:", A & B)
-            elif op_set == "Difference A-B":
-                st.write("A - B:", A - B)
-            elif op_set == "Difference B-A":
-                st.write("B - A:", B - A)
-            elif op_set.startswith("Membership"):
-                x = st.text_input("Check element:", value="3")
-                try:
-                    xv = int(x)
-                except:
-                    try:
-                        xv = float(x)
-                    except:
-                        xv = x
-                st.write(xv, "in A?", xv in A)
-        except Exception as ex:
-            st.error(ex)
-
-# -----------------------
-# Expression evaluation / numeric
-# -----------------------
-elif choice == ops[9]:
-    st.header("Expression evaluation / numeric")
-    expr = st.text_input("Expression to evaluate, e.g., 2+3*4 or x**2 + 2*x where you provide x value", value="2+3*4")
-    subs_text = st.text_input("Subs (optional) like x=2,y=3", value="")
-    if st.button("Evaluate"):
-        try:
-            subs = {}
-            if subs_text.strip():
-                for kv in subs_text.split(","):
-                    if "=" in kv:
-                        k,v = kv.split("=")
-                        try:
-                            subs[sp.Symbol(k.strip())] = safe_parse(v.strip())
-                        except:
-                            subs[sp.Symbol(k.strip())] = float(v.strip())
-            val = safe_parse(expr)
-            if subs:
-                valn = val.evalf(subs=subs)
-            else:
-                valn = val.evalf()
-            st.write(valn)
-        except Exception as ex:
-            st.error(ex)
-
-# -----------------------
-# Footer / tips
-# -----------------------
 st.markdown("---")
-st.markdown("**Tips:** Use operators `**` for powers (x**2). Functions: `sin, cos, tan, exp, log, sqrt`. For system of equations use one per line.")
+st.markdown("**Notes:**\n- Steps are generated heuristically: linear and quadratic equations get clear algebraic steps. For very complex symbolic problems I show symbolic transforms and final answers.\n- Function analysis uses symbolic heuristics (derivatives, critical points, limits). For extremely complicated functions some parts may return 'unknown' — ask me and I'll help expand the analysis for that case.")
