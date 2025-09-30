@@ -1,0 +1,7 @@
+streamlit
+sympy
+numpy
+pandas
+matplotlib
+scikit-learn
+prophet  # optional, only needed if you use Prophet elsewhere
